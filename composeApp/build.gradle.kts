@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.gradle.api.tasks.bundling.Zip
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -44,4 +45,17 @@ compose.desktop {
             packageVersion = "1.0.0"
         }
     }
+}
+
+// Custom task to create the ZIP distribution required by the release workflow
+tasks.register<Zip>("packageZip") {
+    group = "compose desktop"
+    description = "Packages the application as a ZIP file."
+    val createDistributable = tasks.named("createDistributable")
+    dependsOn(createDistributable)
+    from(createDistributable) {
+        into("WindowsUiAutomatorViewer")
+    }
+    archiveFileName.set("WindowsUiAutomatorViewer-1.0.0.zip")
+    destinationDirectory.set(layout.buildDirectory.dir("compose/binaries/main/zip"))
 }
