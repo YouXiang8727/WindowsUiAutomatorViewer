@@ -97,12 +97,36 @@ class WindowsAutomationService {
         return User32.INSTANCE.IsWindow(hWnd) && User32.INSTANCE.IsWindowVisible(hWnd)
     }
 
+    /**
+     * 強制喚醒視窗到前台
+     */
+    fun focusWindow(hWnd: WinDef.HWND) {
+        if (!User32.INSTANCE.IsWindow(hWnd)) return
+        
+        // 使用 GetWindowLong 檢查是否為最小化 (WS_MINIMIZE = 0x20000000, GWL_STYLE = -16)
+        val style = User32.INSTANCE.GetWindowLong(hWnd, -16)
+        if ((style and 0x20000000) != 0) {
+            User32.INSTANCE.ShowWindow(hWnd, 9) // SW_RESTORE
+        }
+        
+        // 帶到前台
+        User32.INSTANCE.SetForegroundWindow(hWnd)
+        User32.INSTANCE.ShowWindow(hWnd, 5) // SW_SHOW
+    }
+
     fun getAppHWnd(): WinDef.HWND? {
+        // 1. Try foreground window first
+        val active = User32.INSTANCE.GetForegroundWindow()
+        if (active != null && isCurrentProcess(active)) return active
+        
+        // 2. Search for visible window with title belonging to this PID
         var appHWnd: WinDef.HWND? = null
         User32.INSTANCE.EnumWindows({ hWnd, _ ->
             if (isCurrentProcess(hWnd) && User32.INSTANCE.IsWindowVisible(hWnd)) {
-                appHWnd = hWnd
-                false
+                if (User32.INSTANCE.GetWindowTextLength(hWnd) > 0) {
+                    appHWnd = hWnd
+                    false
+                } else true
             } else true
         }, null)
         return appHWnd

@@ -116,9 +116,30 @@ fun App() {
                                     selectedApp = app
                                     isWindowMissing = false
                                     scope.launch {
-                                        screenshot = automationService.captureWindowScreenshot(app.hWnd)
-                                        rootNode = automationService.captureWindowUiTree(app.hWnd)
-                                        selectedNode = null
+                                        val appHWnd = automationService.getAppHWnd()
+                                        // Minimize self
+                                        appHWnd?.let {
+                                            User32.INSTANCE.ShowWindow(it, 6) // SW_MINIMIZE
+                                            delay(600)
+                                        }
+                                        try {
+                                            if (automationService.isWindowValid(app.hWnd)) {
+                                                // Focus the target window
+                                                automationService.focusWindow(app.hWnd)
+                                                delay(600) // Wait for focus animation
+                                                
+                                                screenshot = automationService.captureWindowScreenshot(app.hWnd)
+                                                rootNode = automationService.captureWindowUiTree(app.hWnd)
+                                                selectedNode = null
+                                            } else {
+                                                isWindowMissing = true
+                                            }
+                                        } finally {
+                                            // Restore self
+                                            appHWnd?.let {
+                                                User32.INSTANCE.ShowWindow(it, 9) // SW_RESTORE
+                                            }
+                                        }
                                     }
                                 }.background(if (selectedApp?.hWnd == app.hWnd) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
                             )
@@ -253,12 +274,10 @@ fun App() {
                             scope.launch {
                                 val appHWnd = automationService.getAppHWnd()
                                 
-                                // Step 1: Hide self if in FullScreen mode to avoid capturing self
-                                if (viewMode == ViewMode.FullScreen) {
-                                    appHWnd?.let {
-                                        User32.INSTANCE.ShowWindow(it, 6) // SW_MINIMIZE
-                                        delay(500) // Wait for animation
-                                    }
+                                // Step 1: Hide self before capture
+                                appHWnd?.let {
+                                    User32.INSTANCE.ShowWindow(it, 6) // SW_MINIMIZE
+                                    delay(600) 
                                 }
 
                                 try {
@@ -275,6 +294,10 @@ fun App() {
                                     } else {
                                         selectedApp?.let { app ->
                                             if (automationService.isWindowValid(app.hWnd)) {
+                                                // Focus the target window
+                                                automationService.focusWindow(app.hWnd)
+                                                delay(600)
+
                                                 isWindowMissing = false
                                                 screenshot = automationService.captureWindowScreenshot(app.hWnd)
                                                 rootNode = automationService.captureWindowUiTree(app.hWnd)
@@ -288,10 +311,8 @@ fun App() {
                                     }
                                 } finally {
                                     // Step 2: Restore self
-                                    if (viewMode == ViewMode.FullScreen) {
-                                        appHWnd?.let {
-                                            User32.INSTANCE.ShowWindow(it, 9) // SW_RESTORE
-                                        }
+                                    appHWnd?.let {
+                                        User32.INSTANCE.ShowWindow(it, 9) // SW_RESTORE
                                     }
                                 }
                             }
