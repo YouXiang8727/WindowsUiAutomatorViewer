@@ -1,18 +1,27 @@
 package com.youxiang8727.windowsuiautomatorviewer
 
+import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -32,6 +41,37 @@ fun App() {
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     val scope = rememberCoroutineScope()
 
+    // Filter State
+    var selectedPackage by remember { mutableStateOf("All") }
+    var isFilterMenuExpanded by remember { mutableStateOf(false) }
+
+    // Derive available packages
+    val availablePackages = remember(rootNode) {
+        val packages = mutableSetOf("All")
+        rootNode?.children?.map { it.packageName }?.let { packages.addAll(it) }
+        packages.toList().sorted()
+    }
+
+    // Filtered tree
+    val filteredRootNode = remember(rootNode, selectedPackage) {
+        val currentRoot = rootNode
+        if (selectedPackage == "All") {
+            currentRoot
+        } else {
+            currentRoot?.let { root ->
+                root.copy(
+                    children = root.children.filter { it.packageName == selectedPackage }
+                )
+            }
+        }
+    }
+
+    // Animation for the focus mask
+    val maskAlpha by animateFloatAsState(
+        targetValue = if (selectedPackage == "All") 0f else 0.7f,
+        animationSpec = tween(500)
+    )
+
     MaterialTheme {
         Row(modifier = Modifier.fillMaxSize()) {
             Box(
@@ -40,6 +80,7 @@ fun App() {
                     .fillMaxHeight()
                     .background(Color.Black)
                     .onGloballyPositioned { containerSize = it.size }
+                    .clipToBounds()
             ) {
                 screenshot?.let { img ->
                     val bitmap = img.toComposeImageBitmap()
@@ -55,13 +96,12 @@ fun App() {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .pointerInput(rootNode) {
+                                .pointerInput(filteredRootNode) {
                                     detectTapGestures { tapOffset ->
                                         val originalX = (tapOffset.x - offsetX) / scale
                                         val originalY = (tapOffset.y - offsetY) / scale
                                         
-                                        rootNode?.let { root ->
-                                            // 使用優化後的尋找演算法
+                                        filteredRootNode?.let { root ->
                                             selectedNode = findSmallestNodeAt(root, originalX, originalY)
                                         }
                                     }
@@ -74,7 +114,28 @@ fun App() {
                                 contentScale = ContentScale.Fit
                             )
 
-                            Canvas(modifier = Modifier.fillMaxSize()) {
+                            Canvas(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                            ) {
+                                // Draw dark mask
+                                if (maskAlpha > 0f) {
+                                    drawRect(Color.Black.copy(alpha = maskAlpha))
+                                    
+                                    // "Cut out" the selected package windows
+                                    filteredRootNode?.children?.forEach { node ->
+                                        val rect = node.bounds
+                                        drawRect(
+                                            color = Color.Transparent,
+                                            topLeft = Offset(rect.left * scale + offsetX, rect.top * scale + offsetY),
+                                            size = Size(rect.width * scale, rect.height * scale),
+                                            blendMode = BlendMode.Clear
+                                        )
+                                    }
+                                }
+
+                                // Selection Highlight
                                 selectedNode?.let { node ->
                                     val rect = node.bounds
                                     if (rect.width > 0 && rect.height > 0) {
@@ -96,16 +157,46 @@ fun App() {
             }
 
             Column(modifier = Modifier.weight(0.4f).fillMaxHeight().padding(8.dp)) {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            screenshot = automationService.captureScreenshot()
-                            rootNode = automationService.captureUiTree()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                screenshot = automationService.captureScreenshot()
+                                rootNode = automationService.captureUiTree()
+                                selectedNode = null
+                                selectedPackage = "All"
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Capture Screen")
+                    }
+                    
+                    Spacer(modifier = Modifier.width(8.dp))
+                    
+                    Box {
+                        IconButton(onClick = { isFilterMenuExpanded = true }) {
+                            Icon(Icons.Default.FilterList, contentDescription = "Filter")
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Capture Windows Screen")
+                        DropdownMenu(
+                            expanded = isFilterMenuExpanded,
+                            onDismissRequest = { isFilterMenuExpanded = false }
+                        ) {
+                            availablePackages.forEach { pkg ->
+                                DropdownMenuItem(
+                                    text = { Text(pkg) },
+                                    onClick = {
+                                        selectedPackage = pkg
+                                        isFilterMenuExpanded = false
+                                        selectedNode = null
+                                    },
+                                    leadingIcon = {
+                                        RadioButton(selected = selectedPackage == pkg, onClick = null)
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -113,11 +204,13 @@ fun App() {
                 Text("UI Hierarchy", style = MaterialTheme.typography.titleMedium)
                 
                 Box(modifier = Modifier.weight(0.6f).fillMaxWidth().border(1.dp, Color.LightGray)) {
-                    val state = rememberLazyListState()
-                    LazyColumn(state = state) {
-                        rootNode?.let { root ->
-                            item {
-                                NodeTreeItem(root, 0, selectedNode) { selectedNode = it }
+                    Crossfade(targetState = filteredRootNode, animationSpec = tween(500)) { node ->
+                        if (node != null) {
+                            val state = rememberLazyListState()
+                            LazyColumn(state = state) {
+                                item {
+                                    NodeTreeItem(node, 0, selectedNode) { selectedNode = it }
+                                }
                             }
                         }
                     }
@@ -127,14 +220,22 @@ fun App() {
 
                 Text("Node Details", style = MaterialTheme.typography.titleMedium)
                 Box(modifier = Modifier.weight(0.4f).fillMaxWidth().border(1.dp, Color.LightGray).padding(4.dp)) {
-                    selectedNode?.let { node ->
-                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                            PropertyRow("Name", node.name)
-                            PropertyRow("ControlType", node.controlType)
-                            PropertyRow("Class", node.className)
-                            PropertyRow("Bounds", "[${node.bounds.left.toInt()}, ${node.bounds.top.toInt()}][${node.bounds.right.toInt()}, ${node.bounds.bottom.toInt()}]")
-                            node.properties.forEach { (k, v) ->
-                                PropertyRow(k, v)
+                    AnimatedContent(
+                        targetState = selectedNode,
+                        transitionSpec = {
+                            fadeIn(tween(200)) togetherWith fadeOut(tween(200))
+                        }
+                    ) { node ->
+                        if (node != null) {
+                            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                                PropertyRow("Name", node.name)
+                                PropertyRow("Package", node.packageName)
+                                PropertyRow("ControlType", node.controlType)
+                                PropertyRow("Class", node.className)
+                                PropertyRow("Bounds", "[${node.bounds.left.toInt()}, ${node.bounds.top.toInt()}][${node.bounds.right.toInt()}, ${node.bounds.bottom.toInt()}]")
+                                node.properties.forEach { (k, v) ->
+                                    PropertyRow(k, v)
+                                }
                             }
                         }
                     }
