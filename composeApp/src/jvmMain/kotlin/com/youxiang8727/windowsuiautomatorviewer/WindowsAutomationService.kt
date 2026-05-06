@@ -53,22 +53,53 @@ class WindowsAutomationService {
         )
     }
 
+    /**
+     * 獲取正在運行的應用程式列表，並過濾掉沒有畫面的背景視窗
+     */
     fun getRunningApplications(): List<WindowInfo> {
         val apps = mutableListOf<WindowInfo>()
         User32.INSTANCE.EnumWindows({ hWnd, _ ->
+            // 1. 基礎過濾：可見且不是本程式
             if (User32.INSTANCE.IsWindowVisible(hWnd) && !isCurrentProcess(hWnd)) {
                 val titleArray = CharArray(1024)
                 User32.INSTANCE.GetWindowText(hWnd, titleArray, 1024)
                 val title = Native.toString(titleArray).trim()
                 
+                // 2. 必須有標題
                 if (title.isNotEmpty()) {
-                    val processName = getProcessName(hWnd)
-                    apps.add(WindowInfo(title, processName, hWnd))
+                    // 3. 檢查視窗大小 (過濾掉 0x0 或無效大小的視窗)
+                    val rect = WinDef.RECT()
+                    User32.INSTANCE.GetWindowRect(hWnd, rect)
+                    val width = rect.right - rect.left
+                    val height = rect.bottom - rect.top
+                    
+                    if (width > 0 && height > 0) {
+                        // 4. 進階過濾：排除 Tool Window (WS_EX_TOOLWINDOW = 0x80, GWL_EXSTYLE = -20)
+                        val exStyle = User32.INSTANCE.GetWindowLong(hWnd, -20)
+                        val isToolWindow = (exStyle and 0x00000080) != 0
+                        
+                        if (!isToolWindow) {
+                            val processName = getProcessName(hWnd)
+                            apps.add(WindowInfo(title, processName, hWnd))
+                        }
+                    }
                 }
             }
             true
         }, null)
         return apps.sortedBy { it.title }
+    }
+
+    fun focusWindow(hWnd: WinDef.HWND) {
+        if (!User32.INSTANCE.IsWindow(hWnd)) return
+        
+        val style = User32.INSTANCE.GetWindowLong(hWnd, -16)
+        if ((style and 0x20000000) != 0) {
+            User32.INSTANCE.ShowWindow(hWnd, 9) // SW_RESTORE
+        }
+        
+        User32.INSTANCE.SetForegroundWindow(hWnd)
+        User32.INSTANCE.ShowWindow(hWnd, 5) // SW_SHOW
     }
 
     fun captureWindowScreenshot(hWnd: WinDef.HWND): BufferedImage? {
@@ -97,29 +128,10 @@ class WindowsAutomationService {
         return User32.INSTANCE.IsWindow(hWnd) && User32.INSTANCE.IsWindowVisible(hWnd)
     }
 
-    /**
-     * 強制喚醒視窗到前台
-     */
-    fun focusWindow(hWnd: WinDef.HWND) {
-        if (!User32.INSTANCE.IsWindow(hWnd)) return
-        
-        // 使用 GetWindowLong 檢查是否為最小化 (WS_MINIMIZE = 0x20000000, GWL_STYLE = -16)
-        val style = User32.INSTANCE.GetWindowLong(hWnd, -16)
-        if ((style and 0x20000000) != 0) {
-            User32.INSTANCE.ShowWindow(hWnd, 9) // SW_RESTORE
-        }
-        
-        // 帶到前台
-        User32.INSTANCE.SetForegroundWindow(hWnd)
-        User32.INSTANCE.ShowWindow(hWnd, 5) // SW_SHOW
-    }
-
     fun getAppHWnd(): WinDef.HWND? {
-        // 1. Try foreground window first
         val active = User32.INSTANCE.GetForegroundWindow()
         if (active != null && isCurrentProcess(active)) return active
         
-        // 2. Search for visible window with title belonging to this PID
         var appHWnd: WinDef.HWND? = null
         User32.INSTANCE.EnumWindows({ hWnd, _ ->
             if (isCurrentProcess(hWnd) && User32.INSTANCE.IsWindowVisible(hWnd)) {
