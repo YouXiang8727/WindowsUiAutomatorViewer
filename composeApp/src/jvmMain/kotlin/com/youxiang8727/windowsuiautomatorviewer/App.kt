@@ -31,7 +31,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.sun.jna.platform.win32.User32
 import java.awt.image.BufferedImage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class ViewMode {
@@ -88,7 +90,11 @@ fun App() {
     MaterialTheme {
         Row(modifier = Modifier.fillMaxSize()) {
             // Left Column: Navigation / App List (Only for Window Mode)
-            AnimatedVisibility(visible = viewMode == ViewMode.Window) {
+            AnimatedVisibility(
+                visible = viewMode == ViewMode.Window,
+                enter = slideInHorizontally() + fadeIn(),
+                exit = slideOutHorizontally() + fadeOut()
+            ) {
                 Column(modifier = Modifier.width(250.dp).fillMaxHeight().border(1.dp, Color.LightGray)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -134,6 +140,7 @@ fun App() {
                     Text(
                         "${selectedApp?.packageName ?: "Application"} 未開啟",
                         color = Color.Red,
+                        style = MaterialTheme.typography.headlineSmall,
                         modifier = Modifier.align(Alignment.Center)
                     )
                 } else {
@@ -145,21 +152,17 @@ fun App() {
                             val scaleX = containerSize.width.toFloat() / imageSize.width
                             val scaleY = containerSize.height.toFloat() / imageSize.height
                             val scale = if (scaleX > 0 && scaleY > 0) minOf(scaleX, scaleY) else 1f
-                            
-                            // For window mode, the offset depends on the relative position if we were showing the whole screen,
-                            // but here we are showing just the window, so we center it.
                             val offsetX = (containerSize.width - imageSize.width * scale) / 2
                             val offsetY = (containerSize.height - imageSize.height * scale) / 2
 
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .pointerInput(filteredRootNode) {
+                                    .pointerInput(filteredRootNode, viewMode) {
                                         detectTapGestures { tapOffset ->
                                             val originalX = (tapOffset.x - offsetX) / scale
                                             val originalY = (tapOffset.y - offsetY) / scale
                                             
-                                            // Adjust coordinates for window mode if rootNode is a window
                                             val searchX = if (viewMode == ViewMode.Window) {
                                                 originalX + (rootNode?.bounds?.left ?: 0f)
                                             } else {
@@ -192,11 +195,8 @@ fun App() {
                                     val winOffsetLeft = if (viewMode == ViewMode.Window) (rootNode?.bounds?.left ?: 0f) else 0f
                                     val winOffsetTop = if (viewMode == ViewMode.Window) (rootNode?.bounds?.top ?: 0f) else 0f
 
-                                    // Draw dark mask
                                     if (maskAlpha > 0f) {
                                         drawRect(Color.Black.copy(alpha = maskAlpha))
-                                        
-                                        // "Cut out" the selected package windows
                                         filteredRootNode?.children?.forEach { node ->
                                             val rect = node.bounds
                                             drawRect(
@@ -208,7 +208,6 @@ fun App() {
                                         }
                                     }
 
-                                    // Selection Highlight
                                     selectedNode?.let { node ->
                                         val rect = node.bounds
                                         if (rect.width > 0 && rect.height > 0) {
@@ -232,7 +231,6 @@ fun App() {
 
             // Right Column: Controls and Details
             Column(modifier = Modifier.weight(0.4f).fillMaxHeight().padding(8.dp)) {
-                // Mode Switcher
                 TabRow(selectedTabIndex = viewMode.ordinal) {
                     Tab(selected = viewMode == ViewMode.FullScreen, onClick = { viewMode = ViewMode.FullScreen }) {
                         Text("Full Screen", modifier = Modifier.padding(8.dp))
@@ -253,26 +251,46 @@ fun App() {
                     Button(
                         onClick = {
                             scope.launch {
+                                val appHWnd = automationService.getAppHWnd()
+                                
+                                // Step 1: Hide self if in FullScreen mode to avoid capturing self
                                 if (viewMode == ViewMode.FullScreen) {
-                                    screenshot = automationService.captureScreenshot()
-                                    val newRoot = automationService.captureUiTree()
-                                    rootNode = newRoot
-                                    if (selectedPackage != "All") {
-                                        val packageExists = newRoot.children.any { it.packageName == selectedPackage }
-                                        if (!packageExists) selectedPackage = "All"
+                                    appHWnd?.let {
+                                        User32.INSTANCE.ShowWindow(it, 6) // SW_MINIMIZE
+                                        delay(500) // Wait for animation
                                     }
-                                    selectedNode = null
-                                } else {
-                                    selectedApp?.let { app ->
-                                        if (automationService.isWindowValid(app.hWnd)) {
-                                            isWindowMissing = false
-                                            screenshot = automationService.captureWindowScreenshot(app.hWnd)
-                                            rootNode = automationService.captureWindowUiTree(app.hWnd)
-                                            selectedNode = null
-                                        } else {
-                                            isWindowMissing = true
-                                            screenshot = null
-                                            rootNode = null
+                                }
+
+                                try {
+                                    if (viewMode == ViewMode.FullScreen) {
+                                        screenshot = automationService.captureScreenshot()
+                                        val newRoot = automationService.captureUiTree()
+                                        rootNode = newRoot
+                                        if (selectedPackage != "All") {
+                                            val packageExists = newRoot.children.any { it.packageName == selectedPackage }
+                                            if (!packageExists) selectedPackage = "All"
+                                        }
+                                        selectedNode = null
+                                        isWindowMissing = false
+                                    } else {
+                                        selectedApp?.let { app ->
+                                            if (automationService.isWindowValid(app.hWnd)) {
+                                                isWindowMissing = false
+                                                screenshot = automationService.captureWindowScreenshot(app.hWnd)
+                                                rootNode = automationService.captureWindowUiTree(app.hWnd)
+                                                selectedNode = null
+                                            } else {
+                                                isWindowMissing = true
+                                                screenshot = null
+                                                rootNode = null
+                                            }
+                                        }
+                                    }
+                                } finally {
+                                    // Step 2: Restore self
+                                    if (viewMode == ViewMode.FullScreen) {
+                                        appHWnd?.let {
+                                            User32.INSTANCE.ShowWindow(it, 9) // SW_RESTORE
                                         }
                                     }
                                 }
@@ -361,7 +379,6 @@ fun App() {
 fun findSmallestNodeAt(root: UiNode, x: Float, y: Float): UiNode? {
     val candidates = mutableListOf<UiNode>()
     collectCandidates(root, x, y, candidates)
-    // 依據面積從小到大排序，優先回傳面積最小的
     return candidates.minByOrNull { it.bounds.width * it.bounds.height }
 }
 

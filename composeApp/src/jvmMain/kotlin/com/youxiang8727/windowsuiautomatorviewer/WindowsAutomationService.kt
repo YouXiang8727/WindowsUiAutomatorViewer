@@ -22,6 +22,7 @@ data class WindowInfo(
 
 class WindowsAutomationService {
     private val robot = Robot()
+    private val currentPid = Kernel32.INSTANCE.GetCurrentProcessId()
 
     fun captureScreenshot(): BufferedImage {
         val screenSize = Toolkit.getDefaultToolkit().screenSize
@@ -33,7 +34,7 @@ class WindowsAutomationService {
         val screenRect = Toolkit.getDefaultToolkit().screenSize
         
         User32.INSTANCE.EnumWindows({ hWnd, _ ->
-            if (User32.INSTANCE.IsWindowVisible(hWnd)) {
+            if (User32.INSTANCE.IsWindowVisible(hWnd) && !isCurrentProcess(hWnd)) {
                 val node = buildNode(hWnd, 0)
                 if (node.name.isNotEmpty() || node.children.isNotEmpty()) {
                     nodes.add(node)
@@ -55,12 +56,11 @@ class WindowsAutomationService {
     fun getRunningApplications(): List<WindowInfo> {
         val apps = mutableListOf<WindowInfo>()
         User32.INSTANCE.EnumWindows({ hWnd, _ ->
-            if (User32.INSTANCE.IsWindowVisible(hWnd)) {
+            if (User32.INSTANCE.IsWindowVisible(hWnd) && !isCurrentProcess(hWnd)) {
                 val titleArray = CharArray(1024)
                 User32.INSTANCE.GetWindowText(hWnd, titleArray, 1024)
                 val title = Native.toString(titleArray).trim()
                 
-                // 只過濾掉完全沒標題的背景視窗
                 if (title.isNotEmpty()) {
                     val processName = getProcessName(hWnd)
                     apps.add(WindowInfo(title, processName, hWnd))
@@ -97,6 +97,23 @@ class WindowsAutomationService {
         return User32.INSTANCE.IsWindow(hWnd) && User32.INSTANCE.IsWindowVisible(hWnd)
     }
 
+    fun getAppHWnd(): WinDef.HWND? {
+        var appHWnd: WinDef.HWND? = null
+        User32.INSTANCE.EnumWindows({ hWnd, _ ->
+            if (isCurrentProcess(hWnd) && User32.INSTANCE.IsWindowVisible(hWnd)) {
+                appHWnd = hWnd
+                false
+            } else true
+        }, null)
+        return appHWnd
+    }
+
+    private fun isCurrentProcess(hWnd: WinDef.HWND): Boolean {
+        val pid = IntByReference()
+        User32.INSTANCE.GetWindowThreadProcessId(hWnd, pid)
+        return pid.value == currentPid
+    }
+
     private fun buildNode(hWnd: WinDef.HWND, depth: Int): UiNode {
         val rect = WinDef.RECT()
         User32.INSTANCE.GetWindowRect(hWnd, rect)
@@ -112,7 +129,6 @@ class WindowsAutomationService {
         val processName = getProcessName(hWnd)
 
         val children = mutableListOf<UiNode>()
-        // 限制深度避免過深
         if (depth < 5) {
             User32.INSTANCE.EnumChildWindows(hWnd, { childHWnd, _ ->
                 if (User32.INSTANCE.GetParent(childHWnd) == hWnd) {
