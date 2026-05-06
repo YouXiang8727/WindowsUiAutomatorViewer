@@ -162,9 +162,18 @@ fun App() {
                         onClick = {
                             scope.launch {
                                 screenshot = automationService.captureScreenshot()
-                                rootNode = automationService.captureUiTree()
+                                val newRoot = automationService.captureUiTree()
+                                rootNode = newRoot
+                                
+                                // Check if the previously selected package still exists in the new tree
+                                if (selectedPackage != "All") {
+                                    val packageExists = newRoot.children.any { it.packageName == selectedPackage }
+                                    if (!packageExists) {
+                                        selectedPackage = "All"
+                                    }
+                                }
+                                
                                 selectedNode = null
-                                selectedPackage = "All"
                             }
                         },
                         modifier = Modifier.weight(1f)
