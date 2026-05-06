@@ -7,9 +7,11 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,16 +34,27 @@ import androidx.compose.ui.unit.dp
 import java.awt.image.BufferedImage
 import kotlinx.coroutines.launch
 
+enum class ViewMode {
+    FullScreen, Window
+}
+
 @Composable
 fun App() {
     val automationService = remember { WindowsAutomationService() }
+    var viewMode by remember { mutableStateOf(ViewMode.FullScreen) }
+    
     var screenshot by remember { mutableStateOf<BufferedImage?>(null) }
     var rootNode by remember { mutableStateOf<UiNode?>(null) }
     var selectedNode by remember { mutableStateOf<UiNode?>(null) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     val scope = rememberCoroutineScope()
 
-    // Filter State
+    // Window Mode States
+    var runningApps by remember { mutableStateOf(listOf<WindowInfo>()) }
+    var selectedApp by remember { mutableStateOf<WindowInfo?>(null) }
+    var isWindowMissing by remember { mutableStateOf(false) }
+
+    // Filter State (Full Screen Mode)
     var selectedPackage by remember { mutableStateOf("All") }
     var isFilterMenuExpanded by remember { mutableStateOf(false) }
 
@@ -53,9 +66,9 @@ fun App() {
     }
 
     // Filtered tree
-    val filteredRootNode = remember(rootNode, selectedPackage) {
+    val filteredRootNode = remember(rootNode, selectedPackage, viewMode) {
         val currentRoot = rootNode
-        if (selectedPackage == "All") {
+        if (viewMode == ViewMode.Window || selectedPackage == "All") {
             currentRoot
         } else {
             currentRoot?.let { root ->
@@ -68,12 +81,47 @@ fun App() {
 
     // Animation for the focus mask
     val maskAlpha by animateFloatAsState(
-        targetValue = if (selectedPackage == "All") 0f else 0.7f,
+        targetValue = if (viewMode == ViewMode.Window || selectedPackage == "All") 0f else 0.7f,
         animationSpec = tween(500)
     )
 
     MaterialTheme {
         Row(modifier = Modifier.fillMaxSize()) {
+            // Left Column: Navigation / App List (Only for Window Mode)
+            AnimatedVisibility(visible = viewMode == ViewMode.Window) {
+                Column(modifier = Modifier.width(250.dp).fillMaxHeight().border(1.dp, Color.LightGray)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Running Apps", style = MaterialTheme.typography.titleSmall)
+                        IconButton(onClick = { runningApps = automationService.getRunningApplications() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                        }
+                    }
+                    Divider()
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(runningApps) { app ->
+                            ListItem(
+                                headlineContent = { Text(app.title, maxLines = 1) },
+                                supportingContent = { Text(app.packageName, style = MaterialTheme.typography.labelSmall) },
+                                modifier = Modifier.clickable {
+                                    selectedApp = app
+                                    isWindowMissing = false
+                                    scope.launch {
+                                        screenshot = automationService.captureWindowScreenshot(app.hWnd)
+                                        rootNode = automationService.captureWindowUiTree(app.hWnd)
+                                        selectedNode = null
+                                    }
+                                }.background(if (selectedApp?.hWnd == app.hWnd) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Middle: Screenshot View
             Box(
                 modifier = Modifier
                     .weight(0.6f)
@@ -82,127 +130,182 @@ fun App() {
                     .onGloballyPositioned { containerSize = it.size }
                     .clipToBounds()
             ) {
-                screenshot?.let { img ->
-                    val bitmap = img.toComposeImageBitmap()
-                    val imageSize = Size(img.width.toFloat(), img.height.toFloat())
-                    
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        val scaleX = containerSize.width.toFloat() / imageSize.width
-                        val scaleY = containerSize.height.toFloat() / imageSize.height
-                        val scale = if (scaleX > 0 && scaleY > 0) minOf(scaleX, scaleY) else 1f
-                        val offsetX = (containerSize.width - imageSize.width * scale) / 2
-                        val offsetY = (containerSize.height - imageSize.height * scale) / 2
+                if (isWindowMissing) {
+                    Text(
+                        "${selectedApp?.packageName ?: "Application"} 未開啟",
+                        color = Color.Red,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                } else {
+                    screenshot?.let { img ->
+                        val bitmap = img.toComposeImageBitmap()
+                        val imageSize = Size(img.width.toFloat(), img.height.toFloat())
+                        
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            val scaleX = containerSize.width.toFloat() / imageSize.width
+                            val scaleY = containerSize.height.toFloat() / imageSize.height
+                            val scale = if (scaleX > 0 && scaleY > 0) minOf(scaleX, scaleY) else 1f
+                            
+                            // For window mode, the offset depends on the relative position if we were showing the whole screen,
+                            // but here we are showing just the window, so we center it.
+                            val offsetX = (containerSize.width - imageSize.width * scale) / 2
+                            val offsetY = (containerSize.height - imageSize.height * scale) / 2
 
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(filteredRootNode) {
-                                    detectTapGestures { tapOffset ->
-                                        val originalX = (tapOffset.x - offsetX) / scale
-                                        val originalY = (tapOffset.y - offsetY) / scale
-                                        
-                                        filteredRootNode?.let { root ->
-                                            selectedNode = findSmallestNodeAt(root, originalX, originalY)
-                                        }
-                                    }
-                                }
-                        ) {
-                            Image(
-                                painter = BitmapPainter(bitmap),
-                                contentDescription = "Screenshot",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
-
-                            Canvas(
+                            Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
-                            ) {
-                                // Draw dark mask
-                                if (maskAlpha > 0f) {
-                                    drawRect(Color.Black.copy(alpha = maskAlpha))
-                                    
-                                    // "Cut out" the selected package windows
-                                    filteredRootNode?.children?.forEach { node ->
-                                        val rect = node.bounds
-                                        drawRect(
-                                            color = Color.Transparent,
-                                            topLeft = Offset(rect.left * scale + offsetX, rect.top * scale + offsetY),
-                                            size = Size(rect.width * scale, rect.height * scale),
-                                            blendMode = BlendMode.Clear
-                                        )
-                                    }
-                                }
+                                    .pointerInput(filteredRootNode) {
+                                        detectTapGestures { tapOffset ->
+                                            val originalX = (tapOffset.x - offsetX) / scale
+                                            val originalY = (tapOffset.y - offsetY) / scale
+                                            
+                                            // Adjust coordinates for window mode if rootNode is a window
+                                            val searchX = if (viewMode == ViewMode.Window) {
+                                                originalX + (rootNode?.bounds?.left ?: 0f)
+                                            } else {
+                                                originalX
+                                            }
+                                            val searchY = if (viewMode == ViewMode.Window) {
+                                                originalY + (rootNode?.bounds?.top ?: 0f)
+                                            } else {
+                                                originalY
+                                            }
 
-                                // Selection Highlight
-                                selectedNode?.let { node ->
-                                    val rect = node.bounds
-                                    if (rect.width > 0 && rect.height > 0) {
-                                        drawRect(
-                                            color = Color.Red,
-                                            topLeft = Offset(
-                                                rect.left * scale + offsetX,
-                                                rect.top * scale + offsetY
-                                            ),
-                                            size = Size(rect.width * scale, rect.height * scale),
-                                            style = Stroke(width = 2.dp.toPx())
-                                        )
+                                            filteredRootNode?.let { root ->
+                                                selectedNode = findSmallestNodeAt(root, searchX, searchY)
+                                            }
+                                        }
+                                    }
+                            ) {
+                                Image(
+                                    painter = BitmapPainter(bitmap),
+                                    contentDescription = "Screenshot",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
+
+                                Canvas(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                                ) {
+                                    val winOffsetLeft = if (viewMode == ViewMode.Window) (rootNode?.bounds?.left ?: 0f) else 0f
+                                    val winOffsetTop = if (viewMode == ViewMode.Window) (rootNode?.bounds?.top ?: 0f) else 0f
+
+                                    // Draw dark mask
+                                    if (maskAlpha > 0f) {
+                                        drawRect(Color.Black.copy(alpha = maskAlpha))
+                                        
+                                        // "Cut out" the selected package windows
+                                        filteredRootNode?.children?.forEach { node ->
+                                            val rect = node.bounds
+                                            drawRect(
+                                                color = Color.Transparent,
+                                                topLeft = Offset((rect.left - winOffsetLeft) * scale + offsetX, (rect.top - winOffsetTop) * scale + offsetY),
+                                                size = Size(rect.width * scale, rect.height * scale),
+                                                blendMode = BlendMode.Clear
+                                            )
+                                        }
+                                    }
+
+                                    // Selection Highlight
+                                    selectedNode?.let { node ->
+                                        val rect = node.bounds
+                                        if (rect.width > 0 && rect.height > 0) {
+                                            drawRect(
+                                                color = Color.Red,
+                                                topLeft = Offset(
+                                                    (rect.left - winOffsetLeft) * scale + offsetX,
+                                                    (rect.top - winOffsetTop) * scale + offsetY
+                                                ),
+                                                size = Size(rect.width * scale, rect.height * scale),
+                                                style = Stroke(width = 2.dp.toPx())
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                } ?: Text("Click Capture to start", color = Color.White, modifier = Modifier.align(Alignment.Center))
+                    } ?: Text("Click Capture to start", color = Color.White, modifier = Modifier.align(Alignment.Center))
+                }
             }
 
+            // Right Column: Controls and Details
             Column(modifier = Modifier.weight(0.4f).fillMaxHeight().padding(8.dp)) {
+                // Mode Switcher
+                TabRow(selectedTabIndex = viewMode.ordinal) {
+                    Tab(selected = viewMode == ViewMode.FullScreen, onClick = { viewMode = ViewMode.FullScreen }) {
+                        Text("Full Screen", modifier = Modifier.padding(8.dp))
+                    }
+                    Tab(selected = viewMode == ViewMode.Window, onClick = { 
+                        viewMode = ViewMode.Window 
+                        if (runningApps.isEmpty()) {
+                            runningApps = automationService.getRunningApplications()
+                        }
+                    }) {
+                        Text("Window Mode", modifier = Modifier.padding(8.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
                         onClick = {
                             scope.launch {
-                                screenshot = automationService.captureScreenshot()
-                                val newRoot = automationService.captureUiTree()
-                                rootNode = newRoot
-                                
-                                // Check if the previously selected package still exists in the new tree
-                                if (selectedPackage != "All") {
-                                    val packageExists = newRoot.children.any { it.packageName == selectedPackage }
-                                    if (!packageExists) {
-                                        selectedPackage = "All"
+                                if (viewMode == ViewMode.FullScreen) {
+                                    screenshot = automationService.captureScreenshot()
+                                    val newRoot = automationService.captureUiTree()
+                                    rootNode = newRoot
+                                    if (selectedPackage != "All") {
+                                        val packageExists = newRoot.children.any { it.packageName == selectedPackage }
+                                        if (!packageExists) selectedPackage = "All"
+                                    }
+                                    selectedNode = null
+                                } else {
+                                    selectedApp?.let { app ->
+                                        if (automationService.isWindowValid(app.hWnd)) {
+                                            isWindowMissing = false
+                                            screenshot = automationService.captureWindowScreenshot(app.hWnd)
+                                            rootNode = automationService.captureWindowUiTree(app.hWnd)
+                                            selectedNode = null
+                                        } else {
+                                            isWindowMissing = true
+                                            screenshot = null
+                                            rootNode = null
+                                        }
                                     }
                                 }
-                                
-                                selectedNode = null
                             }
                         },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("Capture Screen")
+                        Text("Capture ${if (viewMode == ViewMode.FullScreen) "Screen" else "Window"}")
                     }
                     
-                    Spacer(modifier = Modifier.width(8.dp))
-                    
-                    Box {
-                        IconButton(onClick = { isFilterMenuExpanded = true }) {
-                            Icon(Icons.Default.FilterList, contentDescription = "Filter")
-                        }
-                        DropdownMenu(
-                            expanded = isFilterMenuExpanded,
-                            onDismissRequest = { isFilterMenuExpanded = false }
-                        ) {
-                            availablePackages.forEach { pkg ->
-                                DropdownMenuItem(
-                                    text = { Text(pkg) },
-                                    onClick = {
-                                        selectedPackage = pkg
-                                        isFilterMenuExpanded = false
-                                        selectedNode = null
-                                    },
-                                    leadingIcon = {
-                                        RadioButton(selected = selectedPackage == pkg, onClick = null)
-                                    }
-                                )
+                    if (viewMode == ViewMode.FullScreen) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Box {
+                            IconButton(onClick = { isFilterMenuExpanded = true }) {
+                                Icon(Icons.Default.FilterList, contentDescription = "Filter")
+                            }
+                            DropdownMenu(
+                                expanded = isFilterMenuExpanded,
+                                onDismissRequest = { isFilterMenuExpanded = false }
+                            ) {
+                                availablePackages.forEach { pkg ->
+                                    DropdownMenuItem(
+                                        text = { Text(pkg) },
+                                        onClick = {
+                                            selectedPackage = pkg
+                                            isFilterMenuExpanded = false
+                                            selectedNode = null
+                                        },
+                                        leadingIcon = {
+                                            RadioButton(selected = selectedPackage == pkg, onClick = null)
+                                        }
+                                    )
+                                }
                             }
                         }
                     }

@@ -14,6 +14,12 @@ import java.awt.Toolkit
 import java.awt.image.BufferedImage
 import java.io.File
 
+data class WindowInfo(
+    val title: String,
+    val packageName: String,
+    val hWnd: WinDef.HWND
+)
+
 class WindowsAutomationService {
     private val robot = Robot()
 
@@ -46,6 +52,51 @@ class WindowsAutomationService {
         )
     }
 
+    fun getRunningApplications(): List<WindowInfo> {
+        val apps = mutableListOf<WindowInfo>()
+        User32.INSTANCE.EnumWindows({ hWnd, _ ->
+            if (User32.INSTANCE.IsWindowVisible(hWnd)) {
+                val titleArray = CharArray(1024)
+                User32.INSTANCE.GetWindowText(hWnd, titleArray, 1024)
+                val title = Native.toString(titleArray).trim()
+                
+                // 只過濾掉完全沒標題的背景視窗
+                if (title.isNotEmpty()) {
+                    val processName = getProcessName(hWnd)
+                    apps.add(WindowInfo(title, processName, hWnd))
+                }
+            }
+            true
+        }, null)
+        return apps.sortedBy { it.title }
+    }
+
+    fun captureWindowScreenshot(hWnd: WinDef.HWND): BufferedImage? {
+        if (!isWindowValid(hWnd)) return null
+        
+        val rect = WinDef.RECT()
+        User32.INSTANCE.GetWindowRect(hWnd, rect)
+        val width = rect.right - rect.left
+        val height = rect.bottom - rect.top
+        
+        if (width <= 0 || height <= 0) return null
+        
+        return try {
+            robot.createScreenCapture(Rectangle(rect.left, rect.top, width, height))
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun captureWindowUiTree(hWnd: WinDef.HWND): UiNode? {
+        if (!isWindowValid(hWnd)) return null
+        return buildNode(hWnd, 0)
+    }
+
+    fun isWindowValid(hWnd: WinDef.HWND): Boolean {
+        return User32.INSTANCE.IsWindow(hWnd) && User32.INSTANCE.IsWindowVisible(hWnd)
+    }
+
     private fun buildNode(hWnd: WinDef.HWND, depth: Int): UiNode {
         val rect = WinDef.RECT()
         User32.INSTANCE.GetWindowRect(hWnd, rect)
@@ -61,6 +112,7 @@ class WindowsAutomationService {
         val processName = getProcessName(hWnd)
 
         val children = mutableListOf<UiNode>()
+        // 限制深度避免過深
         if (depth < 5) {
             User32.INSTANCE.EnumChildWindows(hWnd, { childHWnd, _ ->
                 if (User32.INSTANCE.GetParent(childHWnd) == hWnd) {
@@ -102,7 +154,6 @@ class WindowsAutomationService {
         if (processHandle != null) {
             try {
                 val pathArray = CharArray(1024)
-                // 使用 GetModuleFileNameExW 代替 GetModuleBaseNameW
                 val length = Psapi.INSTANCE.GetModuleFileNameExW(processHandle, null, pathArray, 1024)
                 if (length > 0) {
                     val fullPath = Native.toString(pathArray).trim()
