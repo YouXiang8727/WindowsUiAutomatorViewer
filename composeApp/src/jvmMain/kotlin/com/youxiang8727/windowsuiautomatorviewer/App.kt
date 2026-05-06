@@ -34,7 +34,6 @@ fun App() {
 
     MaterialTheme {
         Row(modifier = Modifier.fillMaxSize()) {
-            // Left: Screenshot
             Box(
                 modifier = Modifier
                     .weight(0.6f)
@@ -62,10 +61,8 @@ fun App() {
                                         val originalY = (tapOffset.y - offsetY) / scale
                                         
                                         rootNode?.let { root ->
-                                            val found = findNodeAt(root, originalX, originalY)
-                                            if (found != null) {
-                                                selectedNode = found
-                                            }
+                                            // 使用優化後的尋找演算法
+                                            selectedNode = findSmallestNodeAt(root, originalX, originalY)
                                         }
                                     }
                                 }
@@ -98,7 +95,6 @@ fun App() {
                 } ?: Text("Click Capture to start", color = Color.White, modifier = Modifier.align(Alignment.Center))
             }
 
-            // Right: Tree & Properties
             Column(modifier = Modifier.weight(0.4f).fillMaxHeight().padding(8.dp)) {
                 Button(
                     onClick = {
@@ -148,13 +144,21 @@ fun App() {
     }
 }
 
-fun findNodeAt(node: UiNode, x: Float, y: Float): UiNode? {
-    if (!node.bounds.contains(Offset(x, y))) return null
-    for (child in node.children.reversed()) {
-        val found = findNodeAt(child, x, y)
-        if (found != null) return found
+// 尋找包含該點且面積最小的節點
+fun findSmallestNodeAt(root: UiNode, x: Float, y: Float): UiNode? {
+    val candidates = mutableListOf<UiNode>()
+    collectCandidates(root, x, y, candidates)
+    // 依據面積從小到大排序，優先回傳面積最小的
+    return candidates.minByOrNull { it.bounds.width * it.bounds.height }
+}
+
+fun collectCandidates(node: UiNode, x: Float, y: Float, list: MutableList<UiNode>) {
+    if (node.bounds.contains(Offset(x, y))) {
+        list.add(node)
+        for (child in node.children) {
+            collectCandidates(child, x, y, list)
+        }
     }
-    return node
 }
 
 @Composable
@@ -174,7 +178,8 @@ fun NodeTreeItem(node: UiNode, depth: Int, selectedNode: UiNode?, onSelect: (UiN
                 .fillMaxWidth()
                 .clickable { onSelect(node) }
                 .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                .padding(start = (depth * 16).dp, top = 2.dp, bottom = 2.dp),
+                .padding(start = (depth * 16).dp)
+                .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(

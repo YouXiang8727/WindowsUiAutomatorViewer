@@ -28,8 +28,9 @@ jobs:
         run: chmod +x gradlew
         shell: bash
 
-      - name: Build Windows EXE
-        run: ./gradlew :composeApp:packageExe
+      - name: Build Windows Distributions
+        # 同時打包安裝檔 (EXE) 與 免安裝版 (ZIP)
+        run: ./gradlew :composeApp:packageExe :composeApp:packageZip
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
@@ -39,15 +40,20 @@ jobs:
           name: ${{ github.ref_name == 'master' && 'Latest Build' || github.ref_name }}
           files: |
             composeApp/build/compose/binaries/main/exe/*.exe
+            composeApp/build/compose/binaries/main/zip/*.zip
           draft: false
           # master 分支推播設為 Pre-release，正式 Tag 則為正式版
           prerelease: ${{ github.ref_name == 'master' }}
           generate_release_notes: true
+          # 確保 'latest' 標籤會被更新
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Artifact (Backup)
         uses: actions/upload-artifact@v4
         with:
-          name: WindowsUiAutomatorViewer-exe
-          path: composeApp/build/compose/binaries/main/exe/*.exe
+          name: WindowsUiAutomatorViewer-dist
+          path: |
+            composeApp/build/compose/binaries/main/exe/*.exe
+            composeApp/build/compose/binaries/main/zip/*.zip
