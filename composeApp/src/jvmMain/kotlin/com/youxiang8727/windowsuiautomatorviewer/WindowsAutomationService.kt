@@ -1,7 +1,8 @@
 package com.youxiang8727.windowsuiautomatorviewer
 
-import com.sun.jna.platform.win32.Ole32
-import com.sun.jna.platform.win32.uia.*
+import com.sun.jna.Native
+import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.WinDef
 import androidx.compose.ui.geometry.Rect
 import java.awt.Rectangle
 import java.awt.Robot
@@ -10,17 +11,6 @@ import java.awt.image.BufferedImage
 
 class WindowsAutomationService {
     private val robot = Robot()
-    private var automation: IUIAutomation? = null
-
-    init {
-        // 初始化 COM 庫
-        Ole32.INSTANCE.CoInitializeEx(null, Ole32.COINIT_APARTMENTTHREADED)
-        try {
-            automation = IUIAutomation.create()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
 
     fun captureScreenshot(): BufferedImage {
         val screenSize = Toolkit.getDefaultToolkit().screenSize
@@ -28,69 +18,68 @@ class WindowsAutomationService {
     }
 
     fun captureUiTree(): UiNode {
-        val rootElement = automation?.GetRootElement() ?: return UiNode("Error", "None", "None", Rect.Zero)
-        return walkElement(rootElement, depth = 0)
-    }
-
-    private fun walkElement(element: IUIAutomationElement, depth: Int): UiNode {
-        val name = try { element.currentName ?: "" } catch (e: Exception) { "" }
-        val className = try { element.currentClassName ?: "" } catch (e: Exception) { "" }
-        val controlType = try { 
-            getControlTypeName(element.currentControlType)
-        } catch (e: Exception) { "Unknown" }
-
-        val bounds = try {
-            val rect = element.currentBoundingRectangle
-            Rect(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat())
-        } catch (e: Exception) {
-            Rect.Zero
-        }
-
-        val children = mutableListOf<UiNode>()
-        // 限制深度以防遞迴過深導致當機，實務上可根據需要調整
-        if (depth < 7) { 
-            val condition = automation?.CreateTrueCondition()
-            val elementArray = element.FindAll(TreeScope.TreeScope_Children, condition)
-            if (elementArray != null) {
-                for (i in 0 until elementArray.length) {
-                    val child = elementArray.GetElement(i)
-                    if (child != null) {
-                        val childNode = walkElement(child, depth + 1)
-                        // 只加入有意義的節點（例如有名字或是特定型態）
-                        if (childNode.name.isNotEmpty() || childNode.children.isNotEmpty() || childNode.controlType != "Pane") {
-                            children.add(childNode)
-                        }
-                    }
+        val nodes = mutableListOf<UiNode>()
+        val screenRect = Toolkit.getDefaultToolkit().screenSize
+        
+        // 遍歷所有頂層視窗
+        User32.INSTANCE.EnumWindows({ hWnd, _ ->
+            if (User32.INSTANCE.IsWindowVisible(hWnd)) {
+                val node = buildNode(hWnd, 0)
+                if (node.name.isNotEmpty() || node.children.isNotEmpty()) {
+                    nodes.add(node)
                 }
             }
-        }
+            true
+        }, null)
 
         return UiNode(
-            name = name,
-            className = className,
-            controlType = controlType,
-            bounds = bounds,
-            children = children,
-            properties = mapOf(
-                "AutomationId" to (try { element.currentAutomationId ?: "" } catch (e: Exception) { "" }),
-                "IsEnabled" to (try { element.currentIsEnabled.toString() } catch (e: Exception) { "" }),
-                "LocalizedControlType" to (try { element.currentLocalizedControlType ?: "" } catch (e: Exception) { "" })
-            )
+            "Root", 
+            "Desktop", 
+            "Pane", 
+            Rect(0f, 0f, screenRect.width.toFloat(), screenRect.height.toFloat()), 
+            nodes
         )
     }
 
-    private fun getControlTypeName(typeId: Int): String {
-        return when (typeId) {
-            UIA_ControlIds.UIA_WindowControlTypeId -> "Window"
-            UIA_ControlIds.UIA_ButtonControlTypeId -> "Button"
-            UIA_ControlIds.UIA_TextControlTypeId -> "Text"
-            UIA_ControlIds.UIA_EditControlTypeId -> "Edit"
-            UIA_ControlIds.UIA_ListControlTypeId -> "List"
-            UIA_ControlIds.UIA_PaneControlTypeId -> "Pane"
-            UIA_ControlIds.UIA_GroupControlTypeId -> "Group"
-            UIA_ControlIds.UIA_MenuItemControlTypeId -> "MenuItem"
-            UIA_ControlIds.UIA_TreeItemControlTypeId -> "TreeItem"
-            else -> "Control($typeId)"
+    private fun buildNode(hWnd: WinDef.HWND, depth: Int): UiNode {
+        val rect = WinDef.RECT()
+        User32.INSTANCE.GetWindowRect(hWnd, rect)
+        
+        val titleArray = CharArray(1024)
+        User32.INSTANCE.GetWindowText(hWnd, titleArray, 1024)
+        val title = Native.toString(titleArray).trim()
+        
+        val classNameArray = CharArray(1024)
+        User32.INSTANCE.GetClassName(hWnd, classNameArray, 1024)
+        val className = Native.toString(classNameArray).trim()
+
+        val children = mutableListOf<UiNode>()
+        // 限制深度，並遍歷子控制項 (HWND)
+        if (depth < 5) {
+            User32.INSTANCE.EnumChildWindows(hWnd, { childHWnd, _ ->
+                // 只處理直接子元素，避免 EnumChildWindows 預設的遞迴行為導致樹狀結構混亂
+                if (User32.INSTANCE.GetParent(childHWnd) == hWnd) {
+                    children.add(buildNode(childHWnd, depth + 1))
+                }
+                true
+            }, null)
         }
+
+        return UiNode(
+            name = if (title.isEmpty()) (if (className.isEmpty()) "Unnamed" else className) else title,
+            className = className,
+            controlType = if (depth == 0) "Window" else "Control",
+            bounds = Rect(
+                rect.left.toFloat(),
+                rect.top.toFloat(),
+                rect.right.toFloat(),
+                rect.bottom.toFloat()
+            ),
+            children = children,
+            properties = mapOf(
+                "hWnd" to hWnd.toString(),
+                "Visible" to User32.INSTANCE.IsWindowVisible(hWnd).toString()
+            )
+        )
     }
 }

@@ -5,15 +5,11 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -38,7 +34,7 @@ fun App() {
 
     MaterialTheme {
         Row(modifier = Modifier.fillMaxSize()) {
-            // 左側：截圖與紅框
+            // Left: Screenshot
             Box(
                 modifier = Modifier
                     .weight(0.6f)
@@ -51,10 +47,9 @@ fun App() {
                     val imageSize = Size(img.width.toFloat(), img.height.toFloat())
                     
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        // 計算縮放比例與偏移量，供點擊與繪圖共用
-                        val scaleX = containerSize.width / imageSize.width
-                        val scaleY = containerSize.height / imageSize.height
-                        val scale = minOf(scaleX, scaleY)
+                        val scaleX = containerSize.width.toFloat() / imageSize.width
+                        val scaleY = containerSize.height.toFloat() / imageSize.height
+                        val scale = if (scaleX > 0 && scaleY > 0) minOf(scaleX, scaleY) else 1f
                         val offsetX = (containerSize.width - imageSize.width * scale) / 2
                         val offsetY = (containerSize.height - imageSize.height * scale) / 2
 
@@ -63,7 +58,6 @@ fun App() {
                                 .fillMaxSize()
                                 .pointerInput(rootNode) {
                                     detectTapGestures { tapOffset ->
-                                        // 將畫面上點擊的座標轉換回原始截圖座標
                                         val originalX = (tapOffset.x - offsetX) / scale
                                         val originalY = (tapOffset.y - offsetY) / scale
                                         
@@ -83,7 +77,6 @@ fun App() {
                                 contentScale = ContentScale.Fit
                             )
 
-                            // 繪製紅框
                             Canvas(modifier = Modifier.fillMaxSize()) {
                                 selectedNode?.let { node ->
                                     val rect = node.bounds
@@ -105,7 +98,7 @@ fun App() {
                 } ?: Text("Click Capture to start", color = Color.White, modifier = Modifier.align(Alignment.Center))
             }
 
-            // 右側：樹狀結構與屬性
+            // Right: Tree & Properties
             Column(modifier = Modifier.weight(0.4f).fillMaxHeight().padding(8.dp)) {
                 Button(
                     onClick = {
@@ -155,16 +148,12 @@ fun App() {
     }
 }
 
-// 遞迴尋找點擊座標下最深層的節點
 fun findNodeAt(node: UiNode, x: Float, y: Float): UiNode? {
     if (!node.bounds.contains(Offset(x, y))) return null
-    
-    // 先找子節點，因為子節點通常在「上面」且範圍更小
-    for (child in node.children) {
+    for (child in node.children.reversed()) {
         val found = findNodeAt(child, x, y)
         if (found != null) return found
     }
-    
     return node
 }
 
@@ -173,7 +162,6 @@ fun NodeTreeItem(node: UiNode, depth: Int, selectedNode: UiNode?, onSelect: (UiN
     var isExpanded by remember { mutableStateOf(depth < 2) }
     val isSelected = node == selectedNode
 
-    // 當 selectedNode 改變時，如果它是此節點的子孫，則展開此節點
     LaunchedEffect(selectedNode) {
         if (selectedNode != null && isDescendant(node, selectedNode)) {
             isExpanded = true
@@ -186,20 +174,12 @@ fun NodeTreeItem(node: UiNode, depth: Int, selectedNode: UiNode?, onSelect: (UiN
                 .fillMaxWidth()
                 .clickable { onSelect(node) }
                 .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                .padding(start = (depth * 16).dp, vertical = 2.dp),
+                .padding(start = (depth * 16).dp, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (node.children.isNotEmpty()) {
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp).clickable { isExpanded = !isExpanded }
-                )
-            } else {
-                Spacer(modifier = Modifier.size(16.dp))
-            }
             Text(
-                text = "<${node.controlType}> ${node.name.take(30)}",
+                text = (if (node.children.isNotEmpty()) (if (isExpanded) "[-] " else "[+] ") else "    ") + 
+                       "<${node.controlType}> ${node.name.take(30)}",
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1
             )
