@@ -12,6 +12,7 @@ import java.awt.Rectangle
 import java.awt.Robot
 import java.awt.Toolkit
 import java.awt.image.BufferedImage
+import java.io.File
 
 class WindowsAutomationService {
     private val robot = Robot()
@@ -100,9 +101,13 @@ class WindowsAutomationService {
 
         if (processHandle != null) {
             try {
-                val baseNameArray = CharArray(1024)
-                Psapi.INSTANCE.GetModuleBaseNameW(processHandle, null, baseNameArray, 1024)
-                return Native.toString(baseNameArray).trim()
+                val pathArray = CharArray(1024)
+                // 使用 GetModuleFileNameExW 代替 GetModuleBaseNameW
+                val length = Psapi.INSTANCE.GetModuleFileNameExW(processHandle, null, pathArray, 1024)
+                if (length > 0) {
+                    val fullPath = Native.toString(pathArray).trim()
+                    return File(fullPath).name
+                }
             } finally {
                 Kernel32.INSTANCE.CloseHandle(processHandle)
             }
