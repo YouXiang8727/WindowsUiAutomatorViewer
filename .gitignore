@@ -1,0 +1,49 @@
+# Gradle
+.gradle/
+build/
+**/build/
+scripts/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.run/
+
+# Kotlin
+.kotlin/
+kotlin-js-store/
+
+# Local configuration
+local.properties
+.gradle.properties.user
+
+# OS X
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Log files
+*.log
+
+# Crashlytics
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
+
+# Android Studio captures
+captures/
+
+# External native build
+.externalNativeBuild/
+.cxx/
+
+# Gradle Wrapper
+!gradle/wrapper/gradle-wrapper.jar
+
+# Project specific
+xcuserdata/
