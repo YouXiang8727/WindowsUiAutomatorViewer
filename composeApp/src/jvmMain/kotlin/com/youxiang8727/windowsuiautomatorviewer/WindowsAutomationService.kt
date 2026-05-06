@@ -2,7 +2,11 @@ package com.youxiang8727.windowsuiautomatorviewer
 
 import com.sun.jna.Native
 import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.Kernel32
+import com.sun.jna.platform.win32.Psapi
 import com.sun.jna.platform.win32.WinDef
+import com.sun.jna.platform.win32.WinNT
+import com.sun.jna.ptr.IntByReference
 import androidx.compose.ui.geometry.Rect
 import java.awt.Rectangle
 import java.awt.Robot
@@ -21,7 +25,6 @@ class WindowsAutomationService {
         val nodes = mutableListOf<UiNode>()
         val screenRect = Toolkit.getDefaultToolkit().screenSize
         
-        // 遍歷所有頂層視窗
         User32.INSTANCE.EnumWindows({ hWnd, _ ->
             if (User32.INSTANCE.IsWindowVisible(hWnd)) {
                 val node = buildNode(hWnd, 0)
@@ -33,11 +36,12 @@ class WindowsAutomationService {
         }, null)
 
         return UiNode(
-            "Root", 
-            "Desktop", 
-            "Pane", 
-            Rect(0f, 0f, screenRect.width.toFloat(), screenRect.height.toFloat()), 
-            nodes
+            name = "Root",
+            className = "Desktop",
+            packageName = "explorer.exe",
+            controlType = "Pane",
+            bounds = Rect(0f, 0f, screenRect.width.toFloat(), screenRect.height.toFloat()),
+            children = nodes
         )
     }
 
@@ -53,11 +57,11 @@ class WindowsAutomationService {
         User32.INSTANCE.GetClassName(hWnd, classNameArray, 1024)
         val className = Native.toString(classNameArray).trim()
 
+        val processName = getProcessName(hWnd)
+
         val children = mutableListOf<UiNode>()
-        // 限制深度，並遍歷子控制項 (HWND)
         if (depth < 5) {
             User32.INSTANCE.EnumChildWindows(hWnd, { childHWnd, _ ->
-                // 只處理直接子元素，避免 EnumChildWindows 預設的遞迴行為導致樹狀結構混亂
                 if (User32.INSTANCE.GetParent(childHWnd) == hWnd) {
                     children.add(buildNode(childHWnd, depth + 1))
                 }
@@ -68,6 +72,7 @@ class WindowsAutomationService {
         return UiNode(
             name = if (title.isEmpty()) (if (className.isEmpty()) "Unnamed" else className) else title,
             className = className,
+            packageName = processName,
             controlType = if (depth == 0) "Window" else "Control",
             bounds = Rect(
                 rect.left.toFloat(),
@@ -81,5 +86,27 @@ class WindowsAutomationService {
                 "Visible" to User32.INSTANCE.IsWindowVisible(hWnd).toString()
             )
         )
+    }
+
+    private fun getProcessName(hWnd: WinDef.HWND): String {
+        val pid = IntByReference()
+        User32.INSTANCE.GetWindowThreadProcessId(hWnd, pid)
+        
+        val processHandle = Kernel32.INSTANCE.OpenProcess(
+            WinNT.PROCESS_QUERY_INFORMATION or WinNT.PROCESS_VM_READ,
+            false,
+            pid.value
+        )
+
+        if (processHandle != null) {
+            try {
+                val baseNameArray = CharArray(1024)
+                Psapi.INSTANCE.GetModuleBaseNameW(processHandle, null, baseNameArray, 1024)
+                return Native.toString(baseNameArray).trim()
+            } finally {
+                Kernel32.INSTANCE.CloseHandle(processHandle)
+            }
+        }
+        return "Unknown"
     }
 }
